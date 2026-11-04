@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dreamloop"
+version = "0.1.0"
+description = "Train a playable world model of a simple game on your MacBook."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+  "mlx>=0.22; sys_platform == 'darwin'",
+  "mlx[cpu]>=0.22; sys_platform == 'linux'",
+  "numpy>=1.24",
+  "pillow>=10",
+]
+
+[project.optional-dependencies]
+record = ["mss>=9"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+dreamloop = "dreamloop.cli:main"
+
+[tool.setuptools]
+packages = ["dreamloop"]
+
+[tool.setuptools.package-data]
+dreamloop = ["web/*.html"]
