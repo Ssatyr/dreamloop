@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> None:
 
     s = sub.add_parser("data", help="generate gameplay from a built-in game")
     s.add_argument("--game", choices=list(games.GAMES), default="platformer")
-    s.add_argument("--episodes", type=int, default=120)
+    s.add_argument("--episodes", type=int, default=600)
     s.add_argument("--steps", type=int, default=160)
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--out")
@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("demo", help="data + train + eval + GIF in one go")
     s.add_argument("--game", choices=list(games.GAMES), default="platformer")
     s.add_argument("--preset", default="small", choices=["smoke", "small", "overnight"])
-    s.add_argument("--episodes", type=int, default=120)
+    s.add_argument("--episodes", type=int, default=600)
     s.add_argument("--steps", type=int, default=160)
     s.add_argument("--out")
     s.set_defaults(fn=_demo)

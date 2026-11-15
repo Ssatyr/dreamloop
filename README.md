@@ -40,7 +40,7 @@ dreamloop play --run runs/platformer-small        # opens the dream in your brow
 Step by step:
 
 ```bash
-dreamloop data  --game paddle --episodes 120 --steps 160
+dreamloop data  --game paddle --episodes 600 --steps 160
 dreamloop train --data data/paddle.npz --out runs/paddle --preset small
 dreamloop eval  --run runs/paddle      # how long the dream stays close to the real game
 dreamloop dream --run runs/paddle      # side-by-side GIF for your README

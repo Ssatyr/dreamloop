@@ -114,15 +114,18 @@ def encode_all(tok: Tokenizer, frames: np.ndarray, batch: int = 256) -> np.ndarr
 
 
 def infer_all_actions(lam: LatentActionModel, frames: np.ndarray, batch: int = 256) -> np.ndarray:
+    """Latent action for every consecutive frame pair, a few episodes at a time (no full copies)."""
     e, t = frames.shape[:2]
-    f0 = frames[:, :-1].reshape(-1, *frames.shape[2:])
-    f1 = frames[:, 1:].reshape(-1, *frames.shape[2:])
-    out = []
-    for i in range(0, len(f0), batch):
-        ids = lam.action_ids(_to_float(f0[i : i + batch]), _to_float(f1[i : i + batch]))
+    out = np.empty((e, t - 1), dtype=np.int32)
+    per = max(1, batch // (t - 1))
+    for i in range(0, e, per):
+        chunk = frames[i : i + per]
+        f0 = chunk[:, :-1].reshape(-1, *frames.shape[2:])
+        f1 = chunk[:, 1:].reshape(-1, *frames.shape[2:])
+        ids = lam.action_ids(_to_float(f0), _to_float(f1))
         mx.eval(ids)
-        out.append(np.array(ids))
-    return np.concatenate(out).reshape(e, t - 1).astype(np.int32)
+        out[i : i + per] = np.array(ids).reshape(len(chunk), t - 1)
+    return out
 
 
 def bind_keys(table: np.ndarray, names: list[str]) -> dict[str, int]:
