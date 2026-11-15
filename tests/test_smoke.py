@@ -4,6 +4,7 @@ import numpy as np
 from dreamloop import games
 from dreamloop.data import generate
 from dreamloop.models import FSQ, Dynamics, LatentActionModel, Tokenizer
+from dreamloop.rollout import moving_psnr
 
 
 def test_games_render_64x64():
@@ -43,3 +44,11 @@ def test_model_shapes():
     ctx = mx.zeros((2, 2, 64), dtype=mx.int32)
     out = dyn.generate(ctx, mx.array([0, 3]), steps=3)
     assert out.shape == (2, 64) and int(out.max()) < tok.vocab
+
+
+def test_moving_psnr_ignores_static_background():
+    ref = np.zeros((1, 64, 64, 3), dtype=np.uint8)
+    real = ref.copy()
+    real[0, 10:14, 20:24] = 255  # a 4x4 sprite appears; the other 99.6% of pixels stay put
+    assert moving_psnr(real, ref, ref) < 1  # a frozen picture gets every moving pixel wrong
+    assert moving_psnr(real, real, ref) == 99.0  # a perfect prediction

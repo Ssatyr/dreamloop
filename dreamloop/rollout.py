@@ -59,11 +59,12 @@ class WorldModel:
         return lookup[true_actions]
 
     def rollout(self, episodes: np.ndarray, true_actions: np.ndarray | None, horizon: int,
-                temperature: float = 0.0) -> np.ndarray:
+                temperature: float = 0.0, latent_actions: np.ndarray | None = None) -> np.ndarray:
         """Dream `horizon` frames for each episode, starting from its first C real frames.
 
-        Controls come from the key bindings when true actions exist (like a player
-        pressing keys); otherwise from latent actions inferred on the real video.
+        Controls come from `latent_actions` [B, horizon] if given; else from the key
+        bindings when true actions exist (like a player pressing keys); otherwise from
+        latent actions inferred on the real video.
         """
         c = self.context
         b = episodes.shape[0]
@@ -71,7 +72,9 @@ class WorldModel:
         dreamed = []
         for i in range(horizon):
             t = c + i
-            if true_actions is not None and self.bindings:
+            if latent_actions is not None:
+                action = latent_actions[:, i].astype(np.int32)
+            elif true_actions is not None and self.bindings:
                 action = self.latent_for_true(true_actions[:, t - 1])
             else:
                 action = self.infer_actions(episodes[:, t - 1], episodes[:, t])
@@ -86,20 +89,86 @@ def psnr(a: np.ndarray, b: np.ndarray) -> float:
     return 99.0 if mse == 0 else 10 * math.log10(1.0 / mse)
 
 
-def evaluate_drift(wm: WorldModel, horizon: int = 64, threshold_db: float = 20.0) -> dict:
+def _changed(a: np.ndarray, b: np.ndarray, tol: int = 10) -> np.ndarray:
+    """[..., H, W, 3] uint8 frames -> [..., H, W] bool: pixels that differ by more than tol/255."""
+    return np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=-1) > tol
+
+
+def moving_psnr(real: np.ndarray, pred: np.ndarray, ref: np.ndarray) -> float:
+    """PSNR over only the pixels that changed since `ref`, in the real frame or in the prediction.
+
+    Whole-frame PSNR is useless on these games: ~98% of pixels are static background, so
+    even a frozen picture scores above 20 dB. Here a frozen picture scores ~5 dB, a dream
+    one step behind ~10 dB, and the tokenizer's own reconstruction (the best case) ~28 dB.
+    """
+    mask = _changed(real, ref) | _changed(pred, ref)
+    if not mask.any():
+        return 99.0
+    diff = (real.astype(np.float32) - pred.astype(np.float32)) / 255
+    mse = float(np.mean(diff[mask] ** 2))
+    return 99.0 if mse == 0 else 10 * math.log10(1.0 / mse)
+
+
+def evaluate_drift(wm: WorldModel, horizon: int = 64, threshold_db: float = 20.0, seed: int = 0) -> dict:
+    """How long do dreams stay close to the real game, and do the controls matter?
+
+    Compares three rollouts from the same held-out starts, all scored with moving_psnr:
+    the dream with the real controls, the dream with random actions, and a frozen picture.
+    """
     c = wm.context
     horizon = min(horizon, wm.seed_frames.shape[1] - c)
-    dreams = wm.rollout(wm.seed_frames, wm.seed_actions, horizon)
     real = wm.seed_frames[:, c : c + horizon]
-    curve = [psnr(real[:, h], dreams[:, h]) for h in range(horizon)]
-    below = next((h for h, v in enumerate(curve) if v < threshold_db), horizon)
+    ref = wm.seed_frames[:, c - 1]
+    dreams = wm.rollout(wm.seed_frames, wm.seed_actions, horizon)
+    rng = np.random.default_rng(seed)
+    random_actions = rng.integers(0, wm.lam.num_actions, (len(real), horizon))
+    random_dreams = wm.rollout(wm.seed_frames, None, horizon, latent_actions=random_actions)
+
+    def curve(pred: np.ndarray) -> list[float]:
+        return [round(moving_psnr(real[:, h], pred[:, h], ref), 2) for h in range(horizon)]
+
+    def until(values: list[float]) -> int:
+        return next((h for h, v in enumerate(values) if v < threshold_db), horizon)
+
+    dream_curve = curve(dreams)
+    random_curve = curve(random_dreams)
+    frozen_curve = curve(np.repeat(ref[:, None], horizon, axis=1))
+    steps = until(dream_curve)
     fps = wm.cfg.get("fps", 15)
+    at = min(4, horizon) - 1  # Genie reports its controllability metric at step 4
     return {
-        "psnr_by_step": [round(v, 2) for v in curve],
-        "steps_until_drift": below,
-        "seconds_until_drift": round(below / fps, 1),
+        "metric": "moving-pixel PSNR (pixels that changed since the last real frame)",
+        "moving_psnr_by_step": dream_curve,
+        "random_actions_psnr_by_step": random_curve,
+        "frozen_psnr_by_step": frozen_curve,
+        "full_frame_psnr_by_step": [round(psnr(real[:, h], dreams[:, h]), 2) for h in range(horizon)],
+        "steps_until_drift": steps,
+        "seconds_until_drift": round(steps / fps, 1),
+        "frozen_steps_until_drift": until(frozen_curve),
+        "control_gain_db_at_4": round(dream_curve[at] - random_curve[at], 2),
         "threshold_db": threshold_db,
+        "horizon": horizon,
     }
+
+
+def drift_summary(drift: dict) -> str:
+    """Human-readable lines for `dreamloop eval` and `dreamloop demo`."""
+    marks = [h for h in (1, 4, 16, 32, 64) if h <= drift["horizon"]]
+
+    def row(name: str, key: str) -> str:
+        return f"  {name:<22}" + "  ".join(f"{drift[key][h - 1]:5.1f}" for h in marks)
+
+    capped = " (never drifted within the test)" if drift["steps_until_drift"] == drift["horizon"] else ""
+    return "\n".join([
+        "Moving-pixel PSNR (dB), only pixels that change; steps " + ", ".join(map(str, marks)) + ":",
+        row("dream, real controls", "moving_psnr_by_step"),
+        row("dream, random actions", "random_actions_psnr_by_step"),
+        row("frozen picture", "frozen_psnr_by_step"),
+        f"Stays above {drift['threshold_db']:.0f} dB for {drift['steps_until_drift']} steps "
+        f"({drift['seconds_until_drift']} s){capped}; frozen picture: {drift['frozen_steps_until_drift']} steps.",
+        f"Controls matter: {drift['control_gain_db_at_4']:+.1f} dB at step 4 vs. random actions "
+        "(about 0 means the actions do nothing).",
+    ])
 
 
 def _label(img: Image.Image, text: str, x: int) -> None:

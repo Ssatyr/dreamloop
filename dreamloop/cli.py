@@ -36,7 +36,7 @@ def _dream(args) -> None:
 
 
 def _eval(args) -> None:
-    from .rollout import WorldModel, evaluate_drift
+    from .rollout import WorldModel, drift_summary, evaluate_drift
 
     wm = WorldModel(args.run)
     drift = evaluate_drift(wm, horizon=args.horizon, threshold_db=args.threshold)
@@ -44,11 +44,8 @@ def _eval(args) -> None:
     metrics = json.loads(metrics_path.read_text()) if metrics_path.exists() else {}
     metrics["drift"] = drift
     metrics_path.write_text(json.dumps(metrics, indent=2))
-    curve = drift["psnr_by_step"]
-    marks = [h for h in (1, 4, 16, 32, 64) if h <= len(curve)]
-    print("PSNR vs. the real game: " + ", ".join(f"step {h}: {curve[h - 1]:.1f} dB" for h in marks))
-    print(f"Stays above {args.threshold:.0f} dB for {drift['steps_until_drift']} steps "
-          f"({drift['seconds_until_drift']} s). Saved to {metrics_path}")
+    print(drift_summary(drift))
+    print(f"Saved to {metrics_path}")
 
 
 def _play(args) -> None:
@@ -65,7 +62,7 @@ def _record(args) -> None:
 
 def _demo(args) -> None:
     from .data import generate
-    from .rollout import WorldModel, evaluate_drift, make_gif
+    from .rollout import WorldModel, drift_summary, evaluate_drift, make_gif
     from .train import make_config, train
 
     data_path = f"data/{args.game}.npz"
@@ -79,8 +76,7 @@ def _demo(args) -> None:
     metrics = json.loads(metrics_path.read_text())
     metrics["drift"] = drift
     metrics_path.write_text(json.dumps(metrics, indent=2))
-    print(f"Dream stays above {drift['threshold_db']:.0f} dB PSNR for {drift['steps_until_drift']} steps "
-          f"({drift['seconds_until_drift']} s)")
+    print(drift_summary(drift))
     print(f"Saved {make_gif(wm, Path(run) / 'dream.gif')}")
     print(f"\nNext: dreamloop play --run {run}")
 
