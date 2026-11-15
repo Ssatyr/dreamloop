@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from functools import partial
 from pathlib import Path
 
@@ -155,7 +155,10 @@ def action_report(true: np.ndarray, latent: np.ndarray, names: list[str], k: int
     }
 
 
-def train(data_path: str, out_dir: str, cfg: Config) -> dict:
+def train(data_path: str, out_dir: str, cfg: Config, reuse: str | None = None) -> dict:
+    """Train all three stages, or with `reuse` only the dynamics, loading the tokenizer and
+    latent action model from that earlier run (same game). Changing one thing at a time
+    makes experiments comparable, and all the time goes to the dynamics."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     mx.random.seed(cfg.seed)
@@ -163,6 +166,13 @@ def train(data_path: str, out_dir: str, cfg: Config) -> dict:
 
     ds = Dataset.load(data_path)
     print(ds)
+    if reuse:
+        meta = json.loads((Path(reuse) / "config.json").read_text())
+        if meta["game"] != ds.game:
+            raise ValueError(f"--reuse run is for {meta['game']!r}, but the data is {ds.game!r}.")
+        old = meta["config"]
+        cfg = replace(cfg, tok_ch=old["tok_ch"], tok_levels=old["tok_levels"],
+                      lam_ch=old["lam_ch"], lam_levels=old["lam_levels"])
     holdout = max(1, min(8, len(ds.frames) // 8))
     train_frames, test_frames = ds.frames[:-holdout], ds.frames[-holdout:]
     e, t = train_frames.shape[:2]
@@ -180,7 +190,12 @@ def train(data_path: str, out_dir: str, cfg: Config) -> dict:
     def tok_loss(model, x):
         return mx.mean((model(x) - x) ** 2)
 
-    timings["tokenizer"] = _fit("tokenizer", tok, tok_loss, tok_batch, cfg.tok_steps, cfg.lr)
+    if reuse:
+        tok.load_weights(str(Path(reuse) / "tokenizer.safetensors"))
+        print(f"\n[tokenizer] reused from {reuse}")
+        timings["tokenizer"] = 0.0
+    else:
+        timings["tokenizer"] = _fit("tokenizer", tok, tok_loss, tok_batch, cfg.tok_steps, cfg.lr)
     tok.save_weights(str(out / "tokenizer.safetensors"))
     sample = test_frames.reshape(-1, *test_frames.shape[2:])[:256]
     recon = np.array(tok.decode(tok.encode(_to_float(sample))) * 255).round().clip(0, 255).astype(np.uint8)
@@ -199,7 +214,12 @@ def train(data_path: str, out_dir: str, cfg: Config) -> dict:
         moved = (mx.abs(f1 - f0).sum(axis=-1, keepdims=True) > 0).astype(mx.float32)
         return mx.mean((1 + 10 * moved) * (pred - f1) ** 2)
 
-    timings["latent_actions"] = _fit("latent actions", lam, lam_loss, lam_batch, cfg.lam_steps, cfg.lr)
+    if reuse:
+        lam.load_weights(str(Path(reuse) / "lam.safetensors"))
+        print(f"\n[latent actions] reused from {reuse}")
+        timings["latent_actions"] = 0.0
+    else:
+        timings["latent_actions"] = _fit("latent actions", lam, lam_loss, lam_batch, cfg.lam_steps, cfg.lr)
     lam.save_weights(str(out / "lam.safetensors"))
     lam.eval()  # from now on use the mean/spread remembered during training, not per batch
     latent = infer_all_actions(lam, train_frames)
@@ -240,7 +260,7 @@ def train(data_path: str, out_dir: str, cfg: Config) -> dict:
     # Save everything play/dream needs ----------------------------------------
     np.savez_compressed(out / "seeds.npz", frames=test_frames, actions=ds.actions[-holdout:])
     (out / "config.json").write_text(json.dumps({"game": ds.game, "action_names": ds.action_names,
-                                                  "config": asdict(cfg)}, indent=2))
+                                                  "config": asdict(cfg), "reused_from": reuse}, indent=2))
     summary = {
         "game": ds.game,
         "tokenizer_psnr_db": round(tok_psnr, 2),

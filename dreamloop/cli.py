@@ -23,7 +23,7 @@ def _train(args) -> None:
 
     cfg = make_config(args.preset, tok_steps=args.tok_steps, lam_steps=args.lam_steps,
                       dyn_steps=args.dyn_steps, batch=args.batch, seed=args.seed)
-    train(args.data, args.out, cfg)
+    train(args.data, args.out, cfg, reuse=args.reuse)
 
 
 def _dream(args) -> None:
@@ -100,6 +100,8 @@ def main(argv: list[str] | None = None) -> None:
     for name in ("tok-steps", "lam-steps", "dyn-steps", "batch"):
         s.add_argument(f"--{name}", type=int)
     s.add_argument("--seed", type=int)
+    s.add_argument("--reuse", metavar="RUN",
+                   help="load the tokenizer and latent actions from RUN and train only the dynamics")
     s.set_defaults(fn=_train)
 
     s = sub.add_parser("dream", help="save a side-by-side GIF: real vs. dreamed")
