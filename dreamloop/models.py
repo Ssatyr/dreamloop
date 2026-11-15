@@ -58,9 +58,12 @@ def _upsample(x: mx.array) -> mx.array:
 class ResBlock(nn.Module):
     def __init__(self, ch: int):
         super().__init__()
-        self.n1 = nn.GroupNorm(8, ch, pytorch_compatible=True)
+        # LayerNorm over channels only (per pixel), not GroupNorm: GroupNorm's statistics span
+        # the whole image, so a sprite moving in one corner nudged every token and flipped
+        # ones near a rounding boundary (36% of tokens changed per step vs. 1.35% of pixels).
+        self.n1 = nn.LayerNorm(ch)
         self.c1 = nn.Conv2d(ch, ch, 3, padding=1)
-        self.n2 = nn.GroupNorm(8, ch, pytorch_compatible=True)
+        self.n2 = nn.LayerNorm(ch)
         self.c2 = nn.Conv2d(ch, ch, 3, padding=1)
 
     def __call__(self, x: mx.array) -> mx.array:
