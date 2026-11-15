@@ -26,7 +26,7 @@ class Config:
     tok_steps: int = 3000
     # latent action model
     lam_ch: int = 32
-    num_actions: int = 8
+    lam_levels: list[int] = field(default_factory=lambda: [3, 3])  # 2 dials x 3 positions = 9 actions
     lam_steps: int = 3000
     # dynamics
     dyn_d: int = 192
@@ -174,7 +174,7 @@ def train(data_path: str, out_dir: str, cfg: Config) -> dict:
     print(f"  reconstruction PSNR on held-out frames: {tok_psnr:.1f} dB")
 
     # 2. Latent actions -----------------------------------------------------
-    lam = LatentActionModel(cfg.lam_ch, cfg.num_actions)
+    lam = LatentActionModel(cfg.lam_ch, cfg.lam_levels)
 
     def lam_batch():
         ei, ti = rng.integers(0, e, cfg.batch), rng.integers(0, t - 1, cfg.batch)
@@ -187,6 +187,7 @@ def train(data_path: str, out_dir: str, cfg: Config) -> dict:
 
     timings["latent_actions"] = _fit("latent actions", lam, lam_loss, lam_batch, cfg.lam_steps, cfg.lr)
     lam.save_weights(str(out / "lam.safetensors"))
+    lam.eval()  # from now on use the mean/spread remembered during training, not per batch
     latent = infer_all_actions(lam, train_frames)
     report = None
     if ds.has_actions:

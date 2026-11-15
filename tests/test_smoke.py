@@ -35,7 +35,8 @@ def test_model_shapes():
     ids = tok.encode(x)
     assert ids.shape == (2, 64)
     assert tok.decode(ids).shape == (2, 64, 64, 3)
-    lam = LatentActionModel(16, num_actions=8)
+    lam = LatentActionModel(16, levels=[3, 3])
+    assert lam.num_actions == 9
     assert lam(x, x).shape == (2, 64, 64, 3)
     assert lam.action_ids(x, x).shape == (2,)
     dyn = Dynamics(tok.vocab, 8, context=2, d=32, layers=1, heads=4)

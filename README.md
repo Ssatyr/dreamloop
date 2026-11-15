@@ -17,7 +17,7 @@ Every frame you see in `dreamloop play` is imagined by a neural network. The rea
 1. **Record.** Gameplay video from a built-in game, or (experimental) a screen region of any simple game. No action labels are needed.
 2. **Learn.** Three small networks in [MLX](https://github.com/ml-explore/mlx):
    - a **tokenizer** that turns each 64×64 frame into an 8×8 grid of discrete tokens (FSQ),
-   - a **latent action model** that invents 8 discrete "actions" that best explain how one frame becomes the next,
+   - a **latent action model** that invents 9 discrete "actions" that best explain how one frame becomes the next,
    - a **dynamics transformer** that predicts the next frame's tokens from the last few frames plus an action (MaskGIT decoding).
 3. **Play.** Your keys pick latent actions. The network imagines every next frame, live in your browser.
 

@@ -139,15 +139,27 @@ class Tokenizer(nn.Module):
 
 
 class LatentActionModel(nn.Module):
-    """Learns K discrete 'actions' that best explain how frame t becomes t+1."""
+    """Learns discrete 'actions' that best explain how frame t becomes t+1.
 
-    def __init__(self, ch: int = 48, num_actions: int = 8, n_res: int = 1):
+    The action is a few 'dials' (one FSQ dimension each); K = product of the levels.
+    The default [3, 3] gives two 3-position dials = 9 actions, so different kinds of
+    movement (e.g. sideways vs. up/down) can each get their own direction.
+    Use odd levels: with even ones, a normalized number of 0 lands on a code at the
+    flat edge of tanh (for 2 levels the slope there is 0.002) and training stalls.
+    """
+
+    def __init__(self, ch: int = 48, levels: list[int] = (3, 3), n_res: int = 1):
         super().__init__()
-        self.fsq = FSQ([num_actions])
+        self.fsq = FSQ(list(levels))
+        dials = self.fsq.dim
         self.pair_enc = Encoder(6, ch, ch * 2, n_res)
-        self.to_action = nn.Linear(ch * 2, 1)
+        self.to_action = nn.Linear(ch * 2, dials)
+        # Rescale each dial's number across the batch (mean 0, spread 1) before rounding.
+        # Without this, every example's number can get pushed the same way into the flat
+        # edge of tanh, where gradients vanish and all frames get the same action.
+        self.action_norm = nn.BatchNorm(dials, affine=False)
         self.frame_enc = Encoder(3, ch, ch * 2, n_res)
-        self.action_emb = nn.Linear(1, ch * 2)
+        self.action_emb = nn.Linear(dials, ch * 2)
         self.dec = Decoder(ch * 2, ch, 3, n_res)
 
     @property
@@ -156,7 +168,7 @@ class LatentActionModel(nn.Module):
 
     def infer(self, f0: mx.array, f1: mx.array) -> mx.array:
         h = self.pair_enc(mx.concatenate([f0, f1], axis=-1) * 2 - 1).mean(axis=(1, 2))
-        return self.fsq(self.to_action(h))
+        return self.fsq(self.action_norm(self.to_action(h)))
 
     def __call__(self, f0: mx.array, f1: mx.array) -> mx.array:
         action = self.infer(f0, f1)

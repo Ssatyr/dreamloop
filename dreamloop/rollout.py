@@ -21,7 +21,7 @@ class WorldModel:
         self.game, self.action_names, self.cfg = meta["game"], meta["action_names"], cfg
         self.tok = Tokenizer(cfg["tok_ch"], cfg["tok_levels"])
         self.tok.load_weights(str(run / "tokenizer.safetensors"))
-        self.lam = LatentActionModel(cfg["lam_ch"], cfg["num_actions"])
+        self.lam = LatentActionModel(cfg["lam_ch"], cfg["lam_levels"])
         self.lam.load_weights(str(run / "lam.safetensors"))
         self.dyn = Dynamics(self.tok.vocab, self.lam.num_actions, cfg["context"], 64,
                             cfg["dyn_d"], cfg["dyn_layers"], cfg["dyn_heads"])
