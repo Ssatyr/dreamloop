@@ -23,7 +23,7 @@ class Config:
     # tokenizer
     tok_ch: int = 48
     tok_levels: list[int] = field(default_factory=lambda: [8, 5, 5, 5])
-    tok_steps: int = 3000
+    tok_steps: int = 12000  # the patch tokenizer runs ~140 it/s on an M1 Pro, so this is ~1.5 min
     # latent action model
     lam_ch: int = 32
     lam_levels: list[int] = field(default_factory=lambda: [3, 3])  # 2 dials x 3 positions = 9 actions

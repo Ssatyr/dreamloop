@@ -117,28 +117,61 @@ class Decoder(nn.Module):
 
 
 class Tokenizer(nn.Module):
-    def __init__(self, ch: int = 64, levels: list[int] = (8, 5, 5, 5), n_res: int = 1):
+    """64x64 frame -> 8x8 grid of tokens. Each token sees, and draws, only its own 8x8 patch.
+
+    Patch-local on purpose. These games are flat colours on a 4 px grid: the whole platformer
+    dataset has only 97 distinct 8x8 patches. With a conv tokenizer each token also saw ~54 px
+    around it, so a sprite moving in one patch changed its neighbours' tokens too (26% of
+    tokens changed per step, while only 2.9% of patches were touched), and one wrong token
+    smeared into the patches around it. The encoder is a per-patch MLP (a stride-8 conv, then
+    1x1 convs), and so is the decoder.
+    """
+
+    def __init__(self, ch: int = 64, levels: list[int] = (8, 5, 5, 5), n_res: int = 1, patch: int = 8):
         super().__init__()
         self.fsq = FSQ(list(levels))
-        self.enc = Encoder(3, ch, self.fsq.dim, n_res)
-        self.dec = Decoder(self.fsq.dim, ch, 3, n_res)
+        self.patch = patch
+        hidden = ch * 4
+        self.enc_in = nn.Conv2d(3, hidden, patch, stride=patch)
+        self.enc_mid = [nn.Conv2d(hidden, hidden, 1) for _ in range(n_res + 1)]
+        self.enc_out = nn.Conv2d(hidden, self.fsq.dim, 1)
+        self.dec_in = nn.Conv2d(self.fsq.dim, hidden, 1)
+        self.dec_mid = [nn.Conv2d(hidden, hidden, 1) for _ in range(n_res + 1)]
+        self.dec_out = nn.Conv2d(hidden, patch * patch * 3, 1)
 
     @property
     def vocab(self) -> int:
         return self.fsq.codebook_size
 
+    def _encode(self, x: mx.array) -> mx.array:
+        """[B, 64, 64, 3] in [0, 1] -> [B, 8, 8, dims] numbers before rounding."""
+        h = nn.silu(self.enc_in(x * 2 - 1))
+        for layer in self.enc_mid:
+            h = h + nn.silu(layer(h))
+        return self.enc_out(h)
+
+    def _decode(self, codes: mx.array) -> mx.array:
+        """[B, 8, 8, dims] -> [B, 64, 64, 3]: each token becomes its own 8x8 patch."""
+        h = nn.silu(self.dec_in(codes))
+        for layer in self.dec_mid:
+            h = h + nn.silu(layer(h))
+        p = mx.sigmoid(self.dec_out(h))
+        b, gh, gw, _ = p.shape
+        p = p.reshape(b, gh, gw, self.patch, self.patch, 3).transpose(0, 1, 3, 2, 4, 5)
+        return p.reshape(b, gh * self.patch, gw * self.patch, 3)
+
     def __call__(self, x: mx.array) -> mx.array:
-        return self.dec(self.fsq(self.enc(x * 2 - 1)))
+        return self._decode(self.fsq(self._encode(x)))
 
     def encode(self, x: mx.array) -> mx.array:
         """[B, 64, 64, 3] floats in [0, 1] -> [B, 64] token ids."""
-        idx = self.fsq.codes_to_indices(self.fsq(self.enc(x * 2 - 1)))
+        idx = self.fsq.codes_to_indices(self.fsq(self._encode(x)))
         return idx.reshape(idx.shape[0], -1)
 
     def decode(self, idx: mx.array) -> mx.array:
         side = int(math.isqrt(idx.shape[-1]))
         codes = self.fsq.indices_to_codes(idx.reshape(idx.shape[0], side, side))
-        return self.dec(codes)
+        return self._decode(codes)
 
 
 class LatentActionModel(nn.Module):
