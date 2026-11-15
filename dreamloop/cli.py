@@ -65,7 +65,8 @@ def _demo(args) -> None:
     from .rollout import WorldModel, drift_summary, evaluate_drift, make_gif
     from .train import make_config, train
 
-    data_path = f"data/{args.game}.npz"
+    # the smoke preset uses a tiny dataset; keep it out of data/<game>.npz so later runs never train on it
+    data_path = f"data/{args.game}-smoke.npz" if args.preset == "smoke" else f"data/{args.game}.npz"
     run = args.out or f"runs/{args.game}-{args.preset}"
     episodes, steps = (12, 48) if args.preset == "smoke" else (args.episodes, args.steps)
     generate(args.game, episodes, steps).save(data_path)
