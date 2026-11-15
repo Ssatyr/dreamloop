@@ -125,6 +125,20 @@ def infer_all_actions(lam: LatentActionModel, frames: np.ndarray, batch: int = 2
     return np.concatenate(out).reshape(e, t - 1).astype(np.int32)
 
 
+def bind_keys(table: np.ndarray, names: list[str]) -> dict[str, int]:
+    """Pick a latent action for each key: the code the key usually produces AND that usually means it.
+
+    Score = P(code | key) * P(key | code). Taking just the most common code per key fails on
+    keys that often do nothing: 'left' pressed against a wall looks like 'noop', so 'left'
+    would bind to the "nothing happened" code and do nothing in play.
+    """
+    table = np.asarray(table, dtype=np.float64)
+    p_code_given_key = table / np.maximum(table.sum(axis=1, keepdims=True), 1)
+    p_key_given_code = table / np.maximum(table.sum(axis=0, keepdims=True), 1)
+    score = p_code_given_key * p_key_given_code
+    return {names[a]: int(score[a].argmax()) for a in range(len(names))}
+
+
 def action_report(true: np.ndarray, latent: np.ndarray, names: list[str], k: int) -> dict:
     """How well do unsupervised latent actions line up with the real controls?"""
     table = np.zeros((len(names), k), dtype=np.int64)
@@ -136,7 +150,7 @@ def action_report(true: np.ndarray, latent: np.ndarray, names: list[str], k: int
         "purity": float(table.max(axis=0).sum() / total),
         # each true action, read as its most common latent action
         "consistency": float(table.max(axis=1).sum() / total),
-        "bindings": {names[a]: int(table[a].argmax()) for a in range(len(names))},
+        "bindings": bind_keys(table, names),
         "usage": (table.sum(axis=0) / total).round(4).tolist(),
     }
 

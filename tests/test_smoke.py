@@ -52,3 +52,12 @@ def test_moving_psnr_ignores_static_background():
     real[0, 10:14, 20:24] = 255  # a 4x4 sprite appears; the other 99.6% of pixels stay put
     assert moving_psnr(real, ref, ref) < 1  # a frozen picture gets every moving pixel wrong
     assert moving_psnr(real, real, ref) == 99.0  # a perfect prediction
+
+
+def test_bind_keys_prefers_specific_codes():
+    from dreamloop.train import bind_keys
+
+    # 'left' often does nothing (blocked by a wall), so its most common code is the
+    # "nothing happened" code 0 that noop also uses; it should still bind to code 1.
+    table = [[60, 0], [52, 48]]  # rows: noop, left; columns: codes 0, 1
+    assert bind_keys(table, ["noop", "left"]) == {"noop": 0, "left": 1}
