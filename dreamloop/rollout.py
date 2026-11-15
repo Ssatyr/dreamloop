@@ -118,6 +118,10 @@ def evaluate_drift(wm: WorldModel, horizon: int = 64, threshold_db: float = 20.0
     - the real keys through the key bindings (what a player gets in `play`),
     - random actions, and a frozen picture (baselines).
     Controllability = inferred-action dream minus random-action dream at step 4 (Genie's ΔPSNR).
+
+    Curves are the median over episodes, and drift is measured per episode (then the median
+    is taken), because one unpredictable event (a coin respawning at a random spot) in one
+    episode would otherwise dominate an average pooled over all of them.
     """
     c = wm.context
     horizon = min(horizon, wm.seed_frames.shape[1] - c)
@@ -126,30 +130,36 @@ def evaluate_drift(wm: WorldModel, horizon: int = 64, threshold_db: float = 20.0
     rng = np.random.default_rng(seed)
     random_actions = rng.integers(0, wm.lam.num_actions, (len(real), horizon))
 
-    def curve(pred: np.ndarray) -> list[float]:
-        return [round(moving_psnr(real[:, h], pred[:, h], ref), 2) for h in range(horizon)]
+    def per_episode(pred: np.ndarray) -> np.ndarray:  # [episodes, horizon]
+        return np.array([[moving_psnr(real[e : e + 1, h], pred[e : e + 1, h], ref[e : e + 1])
+                          for h in range(horizon)] for e in range(len(real))])
 
-    def until(values: list[float]) -> int:
-        return next((h for h, v in enumerate(values) if v < threshold_db), horizon)
+    def curve(scores: np.ndarray) -> list[float]:
+        return [round(float(v), 2) for v in np.median(scores, axis=0)]
 
-    inferred = curve(wm.rollout(wm.seed_frames, None, horizon))
-    keys = curve(wm.rollout(wm.seed_frames, wm.seed_actions, horizon)) if wm.bindings else None
-    random = curve(wm.rollout(wm.seed_frames, None, horizon, latent_actions=random_actions))
-    frozen = curve(np.repeat(ref[:, None], horizon, axis=1))
-    steps = until(inferred)
+    def until(scores: np.ndarray) -> tuple[int, list[int]]:
+        each = [next((h for h, v in enumerate(row) if v < threshold_db), horizon) for row in scores]
+        return int(np.median(each)), each
+
+    inferred = per_episode(wm.rollout(wm.seed_frames, None, horizon))
+    keys = per_episode(wm.rollout(wm.seed_frames, wm.seed_actions, horizon)) if wm.bindings else None
+    random = per_episode(wm.rollout(wm.seed_frames, None, horizon, latent_actions=random_actions))
+    frozen = per_episode(np.repeat(ref[:, None], horizon, axis=1))
+    steps, each = until(inferred)
     fps = wm.cfg.get("fps", 15)
     at = min(4, horizon) - 1
     return {
-        "metric": "moving-pixel PSNR (pixels that changed since the last real frame)",
-        "inferred_actions_psnr_by_step": inferred,
-        "keys_psnr_by_step": keys,
-        "random_actions_psnr_by_step": random,
-        "frozen_psnr_by_step": frozen,
+        "metric": "moving-pixel PSNR (pixels that changed since the last real frame), median over episodes",
+        "inferred_actions_psnr_by_step": curve(inferred),
+        "keys_psnr_by_step": curve(keys) if keys is not None else None,
+        "random_actions_psnr_by_step": curve(random),
+        "frozen_psnr_by_step": curve(frozen),
         "steps_until_drift": steps,
+        "steps_until_drift_per_episode": each,
         "seconds_until_drift": round(steps / fps, 1),
-        "keys_steps_until_drift": until(keys) if keys else None,
-        "frozen_steps_until_drift": until(frozen),
-        "control_gain_db_at_4": round(inferred[at] - random[at], 2),
+        "keys_steps_until_drift": until(keys)[0] if keys is not None else None,
+        "frozen_steps_until_drift": until(frozen)[0],
+        "control_gain_db_at_4": round(float(np.median(inferred[:, at] - random[:, at])), 2),
         "threshold_db": threshold_db,
         "horizon": horizon,
     }
@@ -164,7 +174,7 @@ def drift_summary(drift: dict) -> str:
 
     capped = " (never drifted within the test)" if drift["steps_until_drift"] == drift["horizon"] else ""
     lines = [
-        "Moving-pixel PSNR (dB), only pixels that change; steps " + ", ".join(map(str, marks)) + ":",
+        "Moving-pixel PSNR (dB), only pixels that change, median over episodes; steps " + ", ".join(map(str, marks)) + ":",
         row("dream, inferred actions", "inferred_actions_psnr_by_step"),
     ]
     if drift.get("keys_psnr_by_step"):
@@ -172,7 +182,7 @@ def drift_summary(drift: dict) -> str:
     lines += [
         row("dream, random actions", "random_actions_psnr_by_step"),
         row("frozen picture", "frozen_psnr_by_step"),
-        f"Stays above {drift['threshold_db']:.0f} dB for {drift['steps_until_drift']} steps "
+        f"A typical (median) dream stays above {drift['threshold_db']:.0f} dB for {drift['steps_until_drift']} steps "
         f"({drift['seconds_until_drift']} s){capped}"
         + (f"; with real keys: {drift['keys_steps_until_drift']}" if drift.get("keys_steps_until_drift") is not None else "")
         + f"; frozen picture: {drift['frozen_steps_until_drift']}.",
