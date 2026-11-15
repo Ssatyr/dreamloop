@@ -31,7 +31,7 @@ def _dream(args) -> None:
 
     wm = WorldModel(args.run)
     out = make_gif(wm, args.out or Path(args.run) / "dream.gif", episode=args.episode,
-                   steps=args.steps, temperature=args.temperature)
+                   steps=args.steps, temperature=args.temperature, keys=args.keys)
     print(f"Saved {out}")
 
 
@@ -110,6 +110,8 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--episode", type=int, default=0)
     s.add_argument("--steps", type=int, default=90)
     s.add_argument("--temperature", type=float, default=0.0)
+    s.add_argument("--keys", action="store_true",
+                   help="drive the dream with the real keys (via key bindings) instead of actions read from the video")
     s.set_defaults(fn=_dream)
 
     s = sub.add_parser("eval", help="measure how long dreams stay close to the real game")

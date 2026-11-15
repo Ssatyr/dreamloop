@@ -197,11 +197,16 @@ def _label(img: Image.Image, text: str, x: int) -> None:
 
 
 def make_gif(wm: WorldModel, out: str | Path, episode: int = 0, steps: int = 90, scale: int = 4,
-             temperature: float = 0.0) -> Path:
-    """Side-by-side GIF: real game on the left, the network's dream on the right."""
+             temperature: float = 0.0, keys: bool = False) -> Path:
+    """Side-by-side GIF: real game on the left, the network's dream on the right.
+
+    Both start from the same C real frames of a held-out episode. After that the dream sees no
+    real frames: each step it gets only an action, by default the latent action read from the
+    real video (like `eval`), or with keys=True the real key through the key bindings.
+    """
     c = wm.context
     ep = wm.seed_frames[episode : episode + 1]
-    acts = wm.seed_actions[episode : episode + 1]
+    acts = wm.seed_actions[episode : episode + 1] if keys else None
     steps = min(steps, ep.shape[1] - c)
     dream = wm.rollout(ep, acts, steps, temperature=temperature)[0]
     real = ep[0, c : c + steps]
