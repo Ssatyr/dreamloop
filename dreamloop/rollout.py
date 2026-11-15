@@ -110,19 +110,21 @@ def moving_psnr(real: np.ndarray, pred: np.ndarray, ref: np.ndarray) -> float:
 
 
 def evaluate_drift(wm: WorldModel, horizon: int = 64, threshold_db: float = 20.0, seed: int = 0) -> dict:
-    """How long do dreams stay close to the real game, and do the controls matter?
+    """How long do dreams stay close to the real game, and do the actions matter?
 
-    Compares three rollouts from the same held-out starts, all scored with moving_psnr:
-    the dream with the real controls, the dream with random actions, and a frozen picture.
+    All rollouts start from the same held-out frames and are scored with moving_psnr:
+    - actions read from the real video by the latent action model (the main number; this is
+      how Genie measures a world model: it isolates the dynamics from the key bindings),
+    - the real keys through the key bindings (what a player gets in `play`),
+    - random actions, and a frozen picture (baselines).
+    Controllability = inferred-action dream minus random-action dream at step 4 (Genie's ΔPSNR).
     """
     c = wm.context
     horizon = min(horizon, wm.seed_frames.shape[1] - c)
     real = wm.seed_frames[:, c : c + horizon]
     ref = wm.seed_frames[:, c - 1]
-    dreams = wm.rollout(wm.seed_frames, wm.seed_actions, horizon)
     rng = np.random.default_rng(seed)
     random_actions = rng.integers(0, wm.lam.num_actions, (len(real), horizon))
-    random_dreams = wm.rollout(wm.seed_frames, None, horizon, latent_actions=random_actions)
 
     def curve(pred: np.ndarray) -> list[float]:
         return [round(moving_psnr(real[:, h], pred[:, h], ref), 2) for h in range(horizon)]
@@ -130,22 +132,24 @@ def evaluate_drift(wm: WorldModel, horizon: int = 64, threshold_db: float = 20.0
     def until(values: list[float]) -> int:
         return next((h for h, v in enumerate(values) if v < threshold_db), horizon)
 
-    dream_curve = curve(dreams)
-    random_curve = curve(random_dreams)
-    frozen_curve = curve(np.repeat(ref[:, None], horizon, axis=1))
-    steps = until(dream_curve)
+    inferred = curve(wm.rollout(wm.seed_frames, None, horizon))
+    keys = curve(wm.rollout(wm.seed_frames, wm.seed_actions, horizon)) if wm.bindings else None
+    random = curve(wm.rollout(wm.seed_frames, None, horizon, latent_actions=random_actions))
+    frozen = curve(np.repeat(ref[:, None], horizon, axis=1))
+    steps = until(inferred)
     fps = wm.cfg.get("fps", 15)
-    at = min(4, horizon) - 1  # Genie reports its controllability metric at step 4
+    at = min(4, horizon) - 1
     return {
         "metric": "moving-pixel PSNR (pixels that changed since the last real frame)",
-        "moving_psnr_by_step": dream_curve,
-        "random_actions_psnr_by_step": random_curve,
-        "frozen_psnr_by_step": frozen_curve,
-        "full_frame_psnr_by_step": [round(psnr(real[:, h], dreams[:, h]), 2) for h in range(horizon)],
+        "inferred_actions_psnr_by_step": inferred,
+        "keys_psnr_by_step": keys,
+        "random_actions_psnr_by_step": random,
+        "frozen_psnr_by_step": frozen,
         "steps_until_drift": steps,
         "seconds_until_drift": round(steps / fps, 1),
-        "frozen_steps_until_drift": until(frozen_curve),
-        "control_gain_db_at_4": round(dream_curve[at] - random_curve[at], 2),
+        "keys_steps_until_drift": until(keys) if keys else None,
+        "frozen_steps_until_drift": until(frozen),
+        "control_gain_db_at_4": round(inferred[at] - random[at], 2),
         "threshold_db": threshold_db,
         "horizon": horizon,
     }
@@ -156,19 +160,26 @@ def drift_summary(drift: dict) -> str:
     marks = [h for h in (1, 4, 16, 32, 64) if h <= drift["horizon"]]
 
     def row(name: str, key: str) -> str:
-        return f"  {name:<22}" + "  ".join(f"{drift[key][h - 1]:5.1f}" for h in marks)
+        return f"  {name:<24}" + "  ".join(f"{drift[key][h - 1]:5.1f}" for h in marks)
 
     capped = " (never drifted within the test)" if drift["steps_until_drift"] == drift["horizon"] else ""
-    return "\n".join([
+    lines = [
         "Moving-pixel PSNR (dB), only pixels that change; steps " + ", ".join(map(str, marks)) + ":",
-        row("dream, real controls", "moving_psnr_by_step"),
+        row("dream, inferred actions", "inferred_actions_psnr_by_step"),
+    ]
+    if drift.get("keys_psnr_by_step"):
+        lines.append(row("dream, real keys", "keys_psnr_by_step"))
+    lines += [
         row("dream, random actions", "random_actions_psnr_by_step"),
         row("frozen picture", "frozen_psnr_by_step"),
         f"Stays above {drift['threshold_db']:.0f} dB for {drift['steps_until_drift']} steps "
-        f"({drift['seconds_until_drift']} s){capped}; frozen picture: {drift['frozen_steps_until_drift']} steps.",
-        f"Controls matter: {drift['control_gain_db_at_4']:+.1f} dB at step 4 vs. random actions "
+        f"({drift['seconds_until_drift']} s){capped}"
+        + (f"; with real keys: {drift['keys_steps_until_drift']}" if drift.get("keys_steps_until_drift") is not None else "")
+        + f"; frozen picture: {drift['frozen_steps_until_drift']}.",
+        f"Actions matter: {drift['control_gain_db_at_4']:+.1f} dB at step 4 vs. random actions "
         "(about 0 means the actions do nothing).",
-    ])
+    ]
+    return "\n".join(lines)
 
 
 def _label(img: Image.Image, text: str, x: int) -> None:
