@@ -31,14 +31,30 @@ class Session:
         frames = self.wm.seed_frames[ep, start : start + c]
         self.ctx = self.wm.encode(frames)[None]
         self.steps = 0
+        # what was happening in the real frames we start from, e.g. which way the snake was heading
+        self.last_action = int(self.wm.infer_actions(frames[-2:-1], frames[-1:])[0])
         return frames[-1]
 
     def step(self, action: int) -> np.ndarray:
         action = int(np.clip(action, 0, self.wm.lam.num_actions - 1))
+        self.last_action = action
         nxt = self.wm.next_tokens(self.ctx, np.array([action]), temperature=self.temperature)
         self.ctx = np.concatenate([self.ctx[:, 1:], nxt[:, None]], axis=1)
         self.steps += 1
         return self.wm.decode(nxt)[0]
+
+
+def idle_action(bindings: dict[str, int]) -> int | None:
+    """The action to send when no key is held, or None to repeat the last action.
+
+    That's the noop action if it has a code of its own. In snake it doesn't: "noop" means "keep
+    going", which looks like moving in whatever direction the snake is heading, so its code
+    collides with a direction key, and the snake would turn whenever you let go.
+    """
+    noop = bindings.get("noop")
+    if noop is None or noop in {c for k, c in bindings.items() if k != "noop"}:
+        return None
+    return noop
 
 
 def _png(frame: np.ndarray) -> str:
@@ -51,7 +67,7 @@ def serve(run_dir: str, port: int = 8080, temperature: float = 0.0, open_browser
     wm = WorldModel(run_dir)
     session = Session(wm, temperature)
     page = resources.files("dreamloop").joinpath("web/index.html").read_bytes()
-    idle = wm.bindings.get("noop", 0)
+    idle = idle_action(wm.bindings)
     info = {
         "game": wm.game,
         "num_actions": wm.lam.num_actions,
@@ -91,7 +107,10 @@ def serve(run_dir: str, port: int = 8080, temperature: float = 0.0, open_browser
                 if self.path == "/api/reset":
                     frame = session.reset()
                 elif self.path == "/api/step":
-                    frame = session.step(int(body.get("action", idle)))
+                    action = body.get("action")
+                    if action is None:
+                        action = idle if idle is not None else session.last_action
+                    frame = session.step(int(action))
                 else:
                     self._json({"error": "not found"}, 404)
                     return

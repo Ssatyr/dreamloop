@@ -61,3 +61,10 @@ def test_bind_keys_prefers_specific_codes():
     # "nothing happened" code 0 that noop also uses; it should still bind to code 1.
     table = [[60, 0], [52, 48]]  # rows: noop, left; columns: codes 0, 1
     assert bind_keys(table, ["noop", "left"]) == {"noop": 0, "left": 1}
+
+
+def test_idle_repeats_last_action_when_noop_has_no_code_of_its_own():
+    from dreamloop.play import idle_action
+
+    assert idle_action({"noop": 4, "left": 2, "right": 6}) == 4  # platformer: "nothing happened"
+    assert idle_action({"noop": 2, "up": 8, "right": 2}) is None  # snake: noop = "keep going"
