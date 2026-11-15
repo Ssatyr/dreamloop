@@ -23,7 +23,7 @@ class Config:
     # tokenizer
     tok_ch: int = 48
     tok_levels: list[int] = field(default_factory=lambda: [8, 5, 5, 5])
-    tok_steps: int = 12000  # the patch tokenizer runs ~140 it/s on an M1 Pro, so this is ~1.5 min
+    tok_steps: int = 30000  # the patch tokenizer runs ~140 it/s on an M1 Pro: ~3.5 min, 51.7 dB
     # latent action model
     lam_ch: int = 32
     lam_levels: list[int] = field(default_factory=lambda: [3, 3])  # 2 dials x 3 positions = 9 actions
@@ -49,7 +49,7 @@ PRESETS: dict[str, dict] = {
     # a first real result
     "small": dict(),
     # the README preset: bigger models, many more steps
-    "overnight": dict(tok_ch=64, tok_steps=12000, lam_ch=48, lam_steps=12000, dyn_d=320,
+    "overnight": dict(tok_ch=64, tok_steps=30000, lam_ch=48, lam_steps=12000, dyn_d=320,
                       dyn_layers=8, dyn_heads=8, dyn_steps=40000, context=6),
 }
 
@@ -161,8 +161,12 @@ def train(data_path: str, out_dir: str, cfg: Config, reuse: str | None = None) -
     makes experiments comparable, and all the time goes to the dynamics."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    mx.random.seed(cfg.seed)
-    rng = np.random.default_rng(cfg.seed)
+    # One random stream per stage (weights and batches), so changing one stage (say, tokenizer
+    # steps) doesn't change what the next stages learn. With a shared stream the latent action
+    # model's purity moved from 79% to 64% when only the tokenizer's step count changed.
+    def stage_rng(stage: int) -> np.random.Generator:
+        mx.random.seed(cfg.seed * 1000 + stage)
+        return np.random.default_rng([cfg.seed, stage])
 
     ds = Dataset.load(data_path)
     print(ds)
@@ -181,6 +185,7 @@ def train(data_path: str, out_dir: str, cfg: Config, reuse: str | None = None) -
     timings: dict[str, float] = {}
 
     # 1. Tokenizer ---------------------------------------------------------
+    rng = stage_rng(1)
     tok = Tokenizer(cfg.tok_ch, cfg.tok_levels)
 
     def tok_batch():
@@ -203,6 +208,7 @@ def train(data_path: str, out_dir: str, cfg: Config, reuse: str | None = None) -
     print(f"  reconstruction PSNR on held-out frames: {tok_psnr:.1f} dB")
 
     # 2. Latent actions -----------------------------------------------------
+    rng = stage_rng(2)
     lam = LatentActionModel(cfg.lam_ch, cfg.lam_levels)
 
     def lam_batch():
@@ -232,6 +238,7 @@ def train(data_path: str, out_dir: str, cfg: Config, reuse: str | None = None) -
     # 3. Dynamics -----------------------------------------------------------
     tokens = encode_all(tok, train_frames)
     n = tokens.shape[-1]
+    rng = stage_rng(3)
     dyn = Dynamics(tok.vocab, lam.num_actions, cfg.context, n, cfg.dyn_d, cfg.dyn_layers, cfg.dyn_heads)
 
     def dyn_batch():
