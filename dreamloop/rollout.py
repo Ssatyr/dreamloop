@@ -13,6 +13,19 @@ from PIL import Image, ImageDraw
 from .models import Dynamics, LatentActionModel, Tokenizer
 
 
+def idle_action(bindings: dict[str, int]) -> int | None:
+    """The action to send when no key is held, or None to repeat the last action.
+
+    That's the noop action if it has a code of its own. In snake it doesn't: "noop" means "keep
+    going", which looks like moving in whatever direction the snake is heading, so its code
+    collides with a direction key, and the snake would turn whenever you let go.
+    """
+    noop = bindings.get("noop")
+    if noop is None or noop in {c for k, c in bindings.items() if k != "noop"}:
+        return None
+    return noop
+
+
 class WorldModel:
     def __init__(self, run_dir: str | Path):
         run = Path(run_dir)
@@ -69,6 +82,10 @@ class WorldModel:
         c = self.context
         b = episodes.shape[0]
         ctx = np.stack([self.encode(ep[:c]) for ep in episodes])
+        # Like `play`: if noop has no latent action of its own (snake: "keep going"), a noop key
+        # repeats the previous action, starting from what the last two real frames show.
+        repeat_noop = idle_action(self.bindings) is None and "noop" in self.action_names
+        last = self.infer_actions(episodes[:, c - 2], episodes[:, c - 1]) if repeat_noop else None
         dreamed = []
         for i in range(horizon):
             t = c + i
@@ -76,6 +93,9 @@ class WorldModel:
                 action = latent_actions[:, i].astype(np.int32)
             elif true_actions is not None and self.bindings:
                 action = self.latent_for_true(true_actions[:, t - 1])
+                if repeat_noop:
+                    action = np.where(true_actions[:, t - 1] == self.action_names.index("noop"), last, action)
+                    last = action
             else:
                 action = self.infer_actions(episodes[:, t - 1], episodes[:, t])
             nxt = self.next_tokens(ctx, action, temperature=temperature)
@@ -109,7 +129,7 @@ def moving_psnr(real: np.ndarray, pred: np.ndarray, ref: np.ndarray) -> float:
     return 99.0 if mse == 0 else 10 * math.log10(1.0 / mse)
 
 
-def evaluate_drift(wm: WorldModel, horizon: int = 64, threshold_db: float = 20.0, seed: int = 0) -> dict:
+def evaluate_drift(wm: WorldModel, horizon: int | None = None, threshold_db: float = 20.0, seed: int = 0) -> dict:
     """How long do dreams stay close to the real game, and do the actions matter?
 
     All rollouts start from the same held-out frames and are scored with moving_psnr:
@@ -124,7 +144,7 @@ def evaluate_drift(wm: WorldModel, horizon: int = 64, threshold_db: float = 20.0
     episode would otherwise dominate an average pooled over all of them.
     """
     c = wm.context
-    horizon = min(horizon, wm.seed_frames.shape[1] - c)
+    horizon = wm.seed_frames.shape[1] - c if horizon is None else min(horizon, wm.seed_frames.shape[1] - c)  # default: the whole held-out episode
     real = wm.seed_frames[:, c : c + horizon]
     ref = wm.seed_frames[:, c - 1]
     rng = np.random.default_rng(seed)
@@ -167,7 +187,8 @@ def evaluate_drift(wm: WorldModel, horizon: int = 64, threshold_db: float = 20.0
 
 def drift_summary(drift: dict) -> str:
     """Human-readable lines for `dreamloop eval` and `dreamloop demo`."""
-    marks = [h for h in (1, 4, 16, 32, 64) if h <= drift["horizon"]]
+    marks = [h for h in (1, 4, 16, 32, 64, 128) if h <= drift["horizon"]] + [drift["horizon"]]
+    marks = sorted(set(marks))
 
     def row(name: str, key: str) -> str:
         return f"  {name:<24}" + "  ".join(f"{drift[key][h - 1]:5.1f}" for h in marks)

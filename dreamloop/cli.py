@@ -117,7 +117,7 @@ def main(argv: list[str] | None = None) -> None:
 
     s = sub.add_parser("eval", help="measure how long dreams stay close to the real game")
     s.add_argument("--run", required=True)
-    s.add_argument("--horizon", type=int, default=64)
+    s.add_argument("--horizon", type=int, help="steps to dream (default: the whole held-out episode)")
     s.add_argument("--threshold", type=float, default=20.0)
     s.set_defaults(fn=_eval)
 

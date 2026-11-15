@@ -14,7 +14,7 @@ from importlib import resources
 import numpy as np
 from PIL import Image
 
-from .rollout import WorldModel
+from .rollout import WorldModel, idle_action  # noqa: F401 (idle_action is part of play's API)
 
 
 class Session:
@@ -42,19 +42,6 @@ class Session:
         self.ctx = np.concatenate([self.ctx[:, 1:], nxt[:, None]], axis=1)
         self.steps += 1
         return self.wm.decode(nxt)[0]
-
-
-def idle_action(bindings: dict[str, int]) -> int | None:
-    """The action to send when no key is held, or None to repeat the last action.
-
-    That's the noop action if it has a code of its own. In snake it doesn't: "noop" means "keep
-    going", which looks like moving in whatever direction the snake is heading, so its code
-    collides with a direction key, and the snake would turn whenever you let go.
-    """
-    noop = bindings.get("noop")
-    if noop is None or noop in {c for k, c in bindings.items() if k != "noop"}:
-        return None
-    return noop
 
 
 def _png(frame: np.ndarray) -> str:
