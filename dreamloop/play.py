@@ -8,7 +8,7 @@ import json
 import threading
 import time
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import resources
 
 import numpy as np
@@ -98,7 +98,9 @@ def serve(run_dir: str, port: int = 8080, temperature: float = 0.0, open_browser
                 ms = (time.perf_counter() - started) * 1000
                 self._json({"frame": _png(frame), "step": session.steps, "ms": round(ms, 1)})
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    # Single-threaded on purpose: MLX streams belong to the thread that created them, so model
+    # calls from a request thread fail ("There is no Stream(cpu, 1) in current thread").
+    server = HTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}"
     print(f"Dreaming {wm.game} at {url}  (Ctrl+C to stop)")
     if open_browser:
